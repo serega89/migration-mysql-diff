@@ -1,0 +1,171 @@
+#!/usr/bin/php5
+<?
+
+	require_once('lib/finediff.php');
+	require_once('lib/mysqldump.php');
+
+	$path = __DIR__.'/../src/config.ini';
+
+	$env = getenv('APPLICATION_ENV') ? getenv('APPLICATION_ENV') : 'production';
+	$ini_config = parse_ini_file($path, TRUE);
+	$config = $ini_config[$env];
+
+	$sql = new MySQLDump();
+	$sql->connect($config['db.host'],$config['db.user'],$config['db.password'],$config['db.dbname']);
+
+
+	// DIFF
+
+	function extractFragments($text, $delimiter) {
+		$text = str_replace(array("\n","\r"), array("\1","\2"), $text);
+		$delimiter = str_replace(array("\n","\r"), array("\1","\2"), $delimiter);
+		if ( empty($delimiter) ) {
+			return str_split($text, 1);
+		}
+		$fragments = array();
+		$start = $end = 0;
+		for (;;) {
+			$end += strcspn($text, $delimiter, $end);
+			$end += strspn($text, $delimiter, $end);
+			if ( $end === $start ) {
+				break;
+			}
+			$fragments[] = substr($text, $start, $end - $start);
+			$start = $end;
+		}
+		return $fragments;
+	}
+
+	function getdiff($from, $to) {
+
+		$start_time = gettimeofday(true);
+
+		$granularity = 3;
+
+		$from_len = strlen($from);
+		$to_len = strlen($to);
+
+		// $delimiters = array(
+		// 	FineDiff::paragraphDelimiters,
+		// 	FineDiff::sentenceDelimiters,
+		// 	FineDiff::wordDelimiters,
+		// 	FineDiff::characterDelimiters
+		// );
+
+		$granularityStacks = array(
+			FineDiff::$paragraphGranularity,
+			FineDiff::$sentenceGranularity,
+			FineDiff::$wordGranularity,
+			FineDiff::$characterGranularity
+		);
+
+		$diff = new FineDiff($from, $to, $granularityStacks[$granularity]);
+		$edits = $diff->getOps();
+		$exec_time = sprintf('%.3f sec', gettimeofday(true) - $start_time);
+		$rendered_diff = $diff->renderDiffToHTML();
+		$rendering_time = sprintf('%.3f sec', gettimeofday(true) - $start_time);
+
+		if ( $edits !== false ) {
+			$opcodes = array();
+			$opcodes_len = 0;
+			foreach ( $edits as $edit ) {
+				$opcode = $edit->getOpcode();
+				$opcodes_len += strlen($opcode);
+				$opcode = htmlentities($opcode);
+				if ( $edit instanceof FineDiffCopyOp ) {
+					$opcodes[] = "{$opcode}";
+					}
+				else if ( $edit instanceof FineDiffDeleteOp ) {
+					$opcodes[] = "<span class=\"del\">{$opcode}</span>";
+					}
+				else if ( $edit instanceof FineDiffInsertOp ) {
+					$opcodes[] = "<span class=\"ins\">{$opcode}</span>";
+					}
+				else /* if ( $edit instanceof FineDiffReplaceOp ) */ {
+					$opcodes[] = "<span class=\"rep\">{$opcode}</span>";
+					}
+			}
+			$opcodes = implode("", $opcodes);
+			$opcodes_len = sprintf('%d bytes (%.1f %% of &quot;To&quot;)', $opcodes_len, $to_len ? $opcodes_len * 100 / $to_len : 0);
+		}
+		else {
+			$opcodes = '?';
+			$opcodes_len = '?';
+		}
+		$html = $rendered_diff;
+		$html = preg_replace("/[\n\r]+/", '<br/>', $html);
+		ob_start();
+		echo include('lib/html.html');
+		$return = ob_get_contents();
+		ob_end_clean();
+
+
+
+		return $return;
+	}
+
+	// DIFF END
+
+
+	switch(trim($argv[1])) {
+
+		case 'full':
+			echo N."CREATING FULL DUMP!".N;
+			if($sql->list_tables()){
+				foreach($sql->tables as $val) {
+					$sql->q($val);
+					if(file_exists('db/'.$val.'_DUMP.sql')) {
+						$sql->diff1 = file_get_contents('db/'.$val.'_DUMP.sql');
+						$sql->diff2 = $sql->output;
+						$x = getdiff($sql->diff1, $sql->diff2);
+						echo N."CREATING FILE DIFF FILE: db/".$val.'_DUMP.html'.N;
+						file_put_contents('db/diff/'.$val.'_DUMP.html', $x);
+					}
+					echo N."CREATING FILE : db/".$val.'_DUMP.sql'.N;
+					file_put_contents('db/'.$val.'_DUMP.sql', $sql->output);
+				}
+			}
+			break;
+		case 'show':
+			echo "Table list:\n\r\n\r";
+			if($sql->list_tables()){
+				foreach($sql->tables as $val) {
+					echo ' - '.$val."\n\r";
+				}
+			}
+			break;
+		case 'values':
+			$sql->list_values(trim($argv[2]));
+			if(isset($argv[2])) {
+				echo "CREATING FILE : db/".$argv[2].'_DATA.sql';
+				file_put_contents('db/'.$argv[2].'_DATA.sql', $sql->output);
+			}
+			break;
+		case 'struct':
+			$sql->get_table_structure(trim($argv[2]));
+			if(isset($argv[2])) {
+				echo "CREATING FILE : db/".$argv[2].'_STRUCT.sql';
+				file_put_contents('db/'.$argv[2].'_STRUCT.sql', $sql->output);
+			}
+			break;
+		case 'dump':
+			$sql->dump_table(trim($argv[2]));
+			if(isset($argv[2])) {
+				echo "CREATING FILE : db/".$argv[2].'_DUMP.sql';
+				file_put_contents('db/'.$argv[2].'_DUMP.sql', $sql->output);
+			}
+			break;
+		case 'restore':
+			$SQL = file_get_contents('db/'.$argv[2].'.sql');
+			echo $SQL;
+			if(mysql_query($SQL)) {
+				echo 'OK!';
+			} else {
+				echo mysql_error();
+			}
+			break;
+		default:
+			echo file_get_contents('README.md');
+	}
+
+	//print_r(htmlDiff($x, $y));

@@ -1,4 +1,10 @@
-migration-mysql-diff
-====================
+	***************************************************
+	AUTO DIFF MIGRATE - CTULHU INSPIRED ME.
+	***************************************************
 
-migration-mysql-diff
+	run help			- show this help.
+
+	run show			- show db TABLES.
+	run values TABLE		- show TABLE values.
+
+	***************************************************
